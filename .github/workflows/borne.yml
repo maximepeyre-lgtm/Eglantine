@@ -48,6 +48,20 @@ jobs:
           tag: borne
           release: false
 
+      # Local changes for the borne build, kept as patches so the fork stays in sync with upstream.
+      - name: Apply borne patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for p in borne/patches/*.patch; do
+            echo "Applying $p"
+            # Apply to the index (always LF), then rewrite the files, so Windows CRLF checkouts work too.
+            git apply --cached --whitespace=nowarn "$p"
+          done
+          git checkout -- .
+          git status --short
+
       # The profile is in the source tree, where the configure step reads it.
       - name: Check PGO profile
         shell: bash
