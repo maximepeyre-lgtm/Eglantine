@@ -1,0 +1,299 @@
+diff --git a/dist/languages/fr.ts b/dist/languages/fr.ts
+index 9a8f7e0..750878a 100644
+--- a/dist/languages/fr.ts
++++ b/dist/languages/fr.ts
+@@ -3875,6 +3875,10 @@ Would you like to delete the old save data?</source>
+ </context>
+ <context>
+     <name>ConfigureInputPlayer</name>
++    <message>
++        <source>Right-click &gt; Clear, or press Delete while waiting, to leave this input empty.</source>
++        <translation>Clic droit &gt; Effacer, ou touche Suppr pendant l&apos;attente, pour laisser cette commande vide.</translation>
++    </message>
+     <message>
+         <location filename="../../src/yuzu/configuration/configure_input_player.ui" line="14"/>
+         <source>Configure Input</source>
+diff --git a/src/qt_common/config/qt_config.cpp b/src/qt_common/config/qt_config.cpp
+index 94a5cd5..a6a0e78 100644
+--- a/src/qt_common/config/qt_config.cpp
++++ b/src/qt_common/config/qt_config.cpp
+@@ -9,6 +9,24 @@
+ #include "qt_config.h"
+ #include "uisettings.h"
+ 
++namespace {
++// Written for a mapping the user cleared on purpose. An empty value means "not saved yet" and is
++// replaced by the default key on load, so a cleared command needs its own marker to stay empty.
++constexpr char ClearedMappingMarker[] = "[empty]";
++
++std::string ToSavedMapping(const std::string& value) {
++    return value.empty() ? std::string(ClearedMappingMarker) : value;
++}
++
++void FromSavedMapping(std::string& value, const std::string& default_param) {
++    if (value == ClearedMappingMarker) {
++        value.clear();
++    } else if (value.empty()) {
++        value = default_param;
++    }
++}
++} // namespace
++
+ const std::array<int, Settings::NativeButton::NumButtons> QtConfig::default_buttons = {
+     Qt::Key_C,    Qt::Key_X, Qt::Key_V,    Qt::Key_Z,  Qt::Key_F,
+     Qt::Key_G,    Qt::Key_Q, Qt::Key_E,    Qt::Key_R,  Qt::Key_T,
+@@ -105,9 +123,7 @@ void QtConfig::ReadQtPlayerValues(const std::size_t player_index) {
+ 
+         player_buttons = ReadStringSetting(
+             std::string(player_prefix).append(Settings::NativeButton::mapping[i]), default_param);
+-        if (player_buttons.empty()) {
+-            player_buttons = default_param;
+-        }
++        FromSavedMapping(player_buttons, default_param);
+     }
+ 
+     for (int i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
+@@ -118,9 +134,7 @@ void QtConfig::ReadQtPlayerValues(const std::size_t player_index) {
+ 
+         player_analogs = ReadStringSetting(
+             std::string(player_prefix).append(Settings::NativeAnalog::mapping[i]), default_param);
+-        if (player_analogs.empty()) {
+-            player_analogs = default_param;
+-        }
++        FromSavedMapping(player_analogs, default_param);
+     }
+ 
+     for (int i = 0; i < Settings::NativeMotion::NumMotions; ++i) {
+@@ -129,9 +143,7 @@ void QtConfig::ReadQtPlayerValues(const std::size_t player_index) {
+ 
+         player_motions = ReadStringSetting(
+             std::string(player_prefix).append(Settings::NativeMotion::mapping[i]), default_param);
+-        if (player_motions.empty()) {
+-            player_motions = default_param;
+-        }
++        FromSavedMapping(player_motions, default_param);
+     }
+ }
+ 
+@@ -379,19 +391,19 @@ void QtConfig::SaveQtPlayerValues(const std::size_t player_index) {
+     for (int i = 0; i < Settings::NativeButton::NumButtons; ++i) {
+         const std::string default_param = InputCommon::GenerateKeyboardParam(default_buttons[i]);
+         WriteStringSetting(std::string(player_prefix).append(Settings::NativeButton::mapping[i]),
+-                           player.buttons[i], std::make_optional(default_param));
++                           ToSavedMapping(player.buttons[i]), std::make_optional(default_param));
+     }
+     for (int i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
+         const std::string default_param = InputCommon::GenerateAnalogParamFromKeys(
+             default_analogs[i][0], default_analogs[i][1], default_analogs[i][2],
+             default_analogs[i][3], default_stick_mod[i], 0.5f);
+         WriteStringSetting(std::string(player_prefix).append(Settings::NativeAnalog::mapping[i]),
+-                           player.analogs[i], std::make_optional(default_param));
++                           ToSavedMapping(player.analogs[i]), std::make_optional(default_param));
+     }
+     for (int i = 0; i < Settings::NativeMotion::NumMotions; ++i) {
+         const std::string default_param = InputCommon::GenerateKeyboardParam(default_motions[i]);
+         WriteStringSetting(std::string(player_prefix).append(Settings::NativeMotion::mapping[i]),
+-                           player.motions[i], std::make_optional(default_param));
++                           ToSavedMapping(player.motions[i]), std::make_optional(default_param));
+     }
+ }
+ 
+diff --git a/src/yuzu/configuration/configure_input_player.cpp b/src/yuzu/configuration/configure_input_player.cpp
+index 2750cd4..1008051 100644
+--- a/src/yuzu/configuration/configure_input_player.cpp
++++ b/src/yuzu/configuration/configure_input_player.cpp
+@@ -5,6 +5,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include <algorithm>
++#include <array>
+ #include <memory>
+ #include <utility>
+ #include <QInputDialog>
+@@ -376,10 +377,12 @@ ConfigureInputPlayer::ConfigureInputPlayer(QWidget* parent, std::size_t player_i
+                 [=, this](const Common::ParamPackage& params) {
+                     emulated_controller->SetButtonParam(button_id, params);
+                 },
+-                InputCommon::Polling::InputType::Button);
++                InputCommon::Polling::InputType::Button,
++                [=, this] { emulated_controller->SetButtonParam(button_id, {}); });
+         });
+ 
+         button->setContextMenuPolicy(Qt::CustomContextMenu);
++        button->setToolTip(tr("Right-click > Clear, or press Delete while waiting, to leave this input empty."));
+         connect(button, &QPushButton::customContextMenuRequested,
+                 [=, this](const QPoint& menu_location) {
+                     QMenu context_menu;
+@@ -460,10 +463,12 @@ ConfigureInputPlayer::ConfigureInputPlayer(QWidget* parent, std::size_t player_i
+                 [=, this](const Common::ParamPackage& params) {
+                     emulated_controller->SetMotionParam(motion_id, params);
+                 },
+-                InputCommon::Polling::InputType::Motion);
++                InputCommon::Polling::InputType::Motion,
++                [=, this] { emulated_controller->SetMotionParam(motion_id, {}); });
+         });
+ 
+         button->setContextMenuPolicy(Qt::CustomContextMenu);
++        button->setToolTip(tr("Right-click > Clear, or press Delete while waiting, to leave this input empty."));
+ 
+         connect(button, &QPushButton::customContextMenuRequested,
+                 [=, this](const QPoint& menu_location) {
+@@ -558,39 +563,20 @@ ConfigureInputPlayer::ConfigureInputPlayer(QWidget* parent, std::size_t player_i
+                         }
+                         emulated_controller->SetStickParam(analog_id, param);
+                     },
+-                    InputCommon::Polling::InputType::Stick);
++                    InputCommon::Polling::InputType::Stick,
++                    [=, this] { ClearAnalogDirection(analog_id, sub_button_id); });
+             });
+ 
+             analog_button->setContextMenuPolicy(Qt::CustomContextMenu);
++            analog_button->setToolTip(tr("Right-click > Clear, or press Delete while waiting, to leave this input empty."));
+ 
+             connect(analog_button, &QPushButton::customContextMenuRequested,
+                     [=, this](const QPoint& menu_location) {
+                         QMenu context_menu;
+                         Common::ParamPackage param = emulated_controller->GetStickParam(analog_id);
+                         context_menu.addAction(tr("Clear"), [&] {
+-                            if (param.Get("engine", "") != "analog_from_button") {
+-                                emulated_controller->SetStickParam(analog_id, {});
+-                                for (auto button : analog_map_buttons[analog_id]) {
+-                                    button->setText(tr("[not set]"));
+-                                }
+-                                return;
+-                            }
+-                            switch (sub_button_id) {
+-                            case 0:
+-                                param.Erase("up");
+-                                break;
+-                            case 1:
+-                                param.Erase("down");
+-                                break;
+-                            case 2:
+-                                param.Erase("left");
+-                                break;
+-                            case 3:
+-                                param.Erase("right");
+-                                break;
+-                            }
+-                            emulated_controller->SetStickParam(analog_id, param);
+-                            analog_map_buttons[analog_id][sub_button_id]->setText(tr("[not set]"));
++                            ClearAnalogDirection(analog_id, sub_button_id);
++                            UpdateUI();
+                         });
+                         context_menu.addAction(tr("Center axis"), [&] {
+                             const auto stick_value =
+@@ -652,10 +638,16 @@ ConfigureInputPlayer::ConfigureInputPlayer(QWidget* parent, std::size_t player_i
+                     param.Set("modifier", params.Serialize());
+                     emulated_controller->SetStickParam(analog_id, param);
+                 },
+-                InputCommon::Polling::InputType::Button);
++                InputCommon::Polling::InputType::Button,
++                [=, this] {
++                    Common::ParamPackage param = emulated_controller->GetStickParam(analog_id);
++                    param.Set("modifier", "");
++                    emulated_controller->SetStickParam(analog_id, param);
++                });
+         });
+ 
+         analog_map_modifier_button[analog_id]->setContextMenuPolicy(Qt::CustomContextMenu);
++        analog_map_modifier_button[analog_id]->setToolTip(tr("Right-click > Clear, or press Delete while waiting, to leave this input empty."));
+ 
+         connect(
+             analog_map_modifier_button[analog_id], &QPushButton::customContextMenuRequested,
+@@ -1471,7 +1463,7 @@ void ConfigureInputPlayer::UpdateMappingWithDefaults() {
+ void ConfigureInputPlayer::HandleClick(
+     QPushButton* button, std::size_t button_id,
+     std::function<void(const Common::ParamPackage&)> new_input_setter,
+-    InputCommon::Polling::InputType type) {
++    InputCommon::Polling::InputType type, std::function<void()> new_input_clearer) {
+     if (timeout_timer->isActive()) {
+         return;
+     }
+@@ -1483,6 +1475,11 @@ void ConfigureInputPlayer::HandleClick(
+     button->setFocus();
+ 
+     input_setter = std::move(new_input_setter);
++    if (new_input_clearer) {
++        input_clearer = std::move(new_input_clearer);
++    } else {
++        input_clearer = std::nullopt;
++    }
+ 
+     input_subsystem->BeginMapping(type);
+ 
+@@ -1516,6 +1513,7 @@ void ConfigureInputPlayer::SetPollingResult(const Common::ParamPackage& params,
+     ui->controllerFrame->EndMapping();
+ 
+     input_setter = std::nullopt;
++    input_clearer = std::nullopt;
+ }
+ 
+ bool ConfigureInputPlayer::IsInputAcceptable(const Common::ParamPackage& params) const {
+@@ -1561,11 +1559,33 @@ void ConfigureInputPlayer::keyPressEvent(QKeyEvent* event) {
+         return;
+     }
+     event->ignore();
++    // Delete / Backspace while waiting for an input leaves the command empty.
++    if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && input_clearer) {
++        const auto clear = *input_clearer;
++        SetPollingResult({}, true);
++        clear();
++        UpdateUI();
++        return;
++    }
+     if (event->key() != Qt::Key_Escape) {
+         input_subsystem->GetKeyboard()->PressKey(event->key());
+     }
+ }
+ 
++void ConfigureInputPlayer::ClearAnalogDirection(int analog_id, int sub_button_id) {
++    Common::ParamPackage param = emulated_controller->GetStickParam(analog_id);
++    if (param.Get("engine", "") != "analog_from_button") {
++        // A real stick is mapped as a whole: clearing one direction clears the stick.
++        emulated_controller->SetStickParam(analog_id, {});
++        return;
++    }
++    static constexpr std::array<const char*, 4> directions{"up", "down", "left", "right"};
++    if (sub_button_id >= 0 && sub_button_id < static_cast<int>(directions.size())) {
++        param.Erase(directions[sub_button_id]);
++    }
++    emulated_controller->SetStickParam(analog_id, param);
++}
++
+ bool ConfigureInputPlayer::eventFilter(QObject* object, QEvent* event) {
+     if (object == ui->comboDevices && event->type() == QEvent::MouseButtonPress) {
+         RefreshInputDevices();
+diff --git a/src/yuzu/configuration/configure_input_player.h b/src/yuzu/configuration/configure_input_player.h
+index fda09e9..f7ec421 100644
+--- a/src/yuzu/configuration/configure_input_player.h
++++ b/src/yuzu/configuration/configure_input_player.h
+@@ -74,6 +74,9 @@ public:
+     /// Clear all input configuration.
+     void ClearAll();
+ 
++    /// Clears one direction of an analog stick (or the whole stick when a real stick is mapped).
++    void ClearAnalogDirection(int analog_id, int sub_button_id);
++
+ signals:
+     /// Emitted when this controller is (dis)connected by the user.
+     void Connected(bool connected);
+@@ -105,7 +108,8 @@ private:
+     /// Called when the button was pressed.
+     void HandleClick(QPushButton* button, std::size_t button_id,
+                      std::function<void(const Common::ParamPackage&)> new_input_setter,
+-                     InputCommon::Polling::InputType type);
++                     InputCommon::Polling::InputType type,
++                     std::function<void()> new_input_clearer = {});
+ 
+     /// Finish polling and configure input using the input_setter.
+     void SetPollingResult(const Common::ParamPackage& params, bool abort);
+@@ -185,6 +189,8 @@ private:
+ 
+     /// This will be the the setting function when an input is awaiting configuration.
+     std::optional<std::function<void(const Common::ParamPackage&)>> input_setter;
++    /// Clears the mapping being captured (Delete/Backspace while waiting for an input).
++    std::optional<std::function<void()>> input_clearer;
+ 
+     Core::HID::EmulatedController* emulated_controller;
+ 
