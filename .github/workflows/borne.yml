@@ -57,7 +57,8 @@ jobs:
           for p in borne/patches/*.patch; do
             echo "Applying $p"
             # Apply to the index (always LF), then rewrite the files, so Windows CRLF checkouts work too.
-            git apply --cached --whitespace=nowarn "$p"
+            # The checkout may have turned the patch itself into CRLF: strip that first.
+            tr -d '\r' < "$p" | git apply --cached --whitespace=nowarn -
           done
           git checkout -- .
           git status --short
